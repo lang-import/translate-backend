@@ -29,16 +29,21 @@ func main() {
 	}
 	client := redis.NewClient(clientConfig)
 	router := gin.Default()
-	router.GET("/translate/:word", func(gctx *gin.Context) {
+	router.GET("/translate/:word/to/:lang", func(gctx *gin.Context) {
 		word := strings.ToLower(strings.TrimSpace(gctx.Param("word")))
+		lang := strings.ToLower(strings.TrimSpace(gctx.Param("lang")))
 		if word == "" {
 			gctx.String(http.StatusOK, "")
 			return
 		}
-		cached := client.Get(word)
+		if lang == "" {
+			gctx.String(http.StatusOK, "")
+			return
+		}
+		cached := client.HGet(lang, word)
 		ans := cached.String()
 		if cached.Err() == redis.Nil {
-			ans = fetch(word, client)
+			ans = fetch(word, lang, client)
 		}
 		gctx.String(http.StatusOK, ans)
 		return
@@ -49,16 +54,17 @@ func main() {
 
 var fetchLock sync.Mutex
 
-func fetch(word string, client *redis.Client) string {
+func fetch(word, lang string, client *redis.Client) string {
 	fetchLock.Lock()
-	cached := client.Get(word)
+	cached := client.HGet(lang, word)
 	if cached.Err() == nil {
 		fetchLock.Unlock()
 		return cached.String()
 	}
 	defer fetchLock.Unlock()
-	cmd := exec.Command(config.Command, word)
+	cmd := exec.Command(config.Command, ":"+lang, word)
 	res, err := cmd.CombinedOutput()
+	fmt.Println(string(res))
 	if err != nil {
 		fmt.Println("failed to translate", word, ":", err)
 		return word
@@ -66,6 +72,6 @@ func fetch(word string, client *redis.Client) string {
 
 	ans := strings.TrimSpace(strings.ToLower(strings.SplitN(string(res), "\n", 2)[0]))
 
-	client.Set(word, ans, 0)
+	client.HSet(lang, word, ans)
 	return ans
 }
