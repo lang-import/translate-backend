@@ -1,0 +1,11 @@
+version: '3'
+
+services:
+  redis:
+    image: redis
+
+  app:
+    build: .
+    image: app:1.0
+    ports:
+      - 8888:8888
