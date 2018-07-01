@@ -8,6 +8,8 @@ import (
 	"sync"
 	"os/exec"
 	"fmt"
+	"github.com/jessevdk/go-flags"
+	"os"
 )
 
 var config struct {
@@ -17,6 +19,10 @@ var config struct {
 }
 
 func main() {
+	_, err := flags.Parse(&config)
+	if err != nil {
+		os.Exit(1)
+	}
 	clientConfig, err := redis.ParseURL(config.Redis)
 	if err != nil {
 		panic(err)
