@@ -41,7 +41,7 @@ func main() {
 			return
 		}
 		cached := client.HGet(lang, word)
-		ans := cached.String()
+		ans := cached.Val()
 		if cached.Err() == redis.Nil {
 			ans = fetch(word, lang, client)
 		}
@@ -59,18 +59,17 @@ func fetch(word, lang string, client *redis.Client) string {
 	cached := client.HGet(lang, word)
 	if cached.Err() == nil {
 		fetchLock.Unlock()
-		return cached.String()
+		return cached.Val()
 	}
 	defer fetchLock.Unlock()
-	cmd := exec.Command(config.Command, ":"+lang, word)
+	cmd := exec.Command(config.Command, "-b", ":"+lang, word)
 	res, err := cmd.CombinedOutput()
 	fmt.Println(string(res))
 	if err != nil {
 		fmt.Println("failed to translate", word, ":", err)
 		return word
 	}
-
-	ans := strings.TrimSpace(strings.ToLower(strings.SplitN(string(res), "\n", 2)[0]))
+	ans := strings.ToLower(strings.TrimSpace(string(res)))
 
 	client.HSet(lang, word, ans)
 	return ans
