@@ -8,4 +8,4 @@ services:
     build: .
     image: app:1.0
     ports:
-      - 8888:8888
+      - 101010:8888
