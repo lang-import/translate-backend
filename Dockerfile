@@ -1,5 +1,5 @@
 FROM golang:1.10-stretch
-RUN wget http://git.io/trans && mv trans /usr/bin/ && chmod +x /usr/bin/trans && apt update && apt install -y gawk curl
+RUN apt update &&  apt install -y ca-certificates gawk curl && wget http://git.io/trans && mv trans /usr/bin/ && chmod +x /usr/bin/trans
 WORKDIR /go/src/app
 COPY cmd/. .
 RUN go get -d -v ./...
