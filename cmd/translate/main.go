@@ -104,7 +104,7 @@ func fetch(word, lang string, client *redis.Client) (string) {
 func invokeTrans(word, lang, engine string) (string, error) {
 	out := &bytes.Buffer{}
 	combined := &bytes.Buffer{}
-	cmd := exec.Command(config.Command, "-b", ":"+lang, word)
+	cmd := exec.Command(config.Command, "-e", engine, "-b", ":"+lang, word)
 	cmd.Stdout = io.MultiWriter(out, combined)
 	cmd.Stderr = combined
 	err := cmd.Run()
