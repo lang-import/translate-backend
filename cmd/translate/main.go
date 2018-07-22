@@ -16,6 +16,7 @@ import (
 	"unicode"
 	"bytes"
 	"io"
+	"regexp"
 )
 
 var config struct {
@@ -27,6 +28,7 @@ var config struct {
 	ThrottleNotification time.Duration `long:"notification-interval" env:"NOTIFICATION_INTERVAL" description:"Merge notifications to one message during this time" default:"1m"`
 }
 
+var engines = []string{"google"} // default, will be overwritten
 var notifyChannel chan string
 
 func main() {
@@ -64,6 +66,15 @@ func main() {
 	go notificationLoop()
 	go func() { notifyChannel <- "import-lang backend started" }()
 	go cleanup(client)
+	go func() {
+		list, err := getEngines()
+		if err != nil {
+			errorNotification("failed get engines list: " + err.Error())
+		} else {
+			infoNotification("supported engines: " + strings.Join(list, ", "))
+			engines = list
+		}
+	}()
 	panic(router.Run(config.Listen))
 }
 
@@ -77,24 +88,36 @@ func fetch(word, lang string, client *redis.Client) (string) {
 		return cached.Val()
 	}
 	defer fetchLock.Unlock()
+	for _, engine := range engines {
+		ans, err := invokeTrans(word, lang, engine)
+		if err == nil {
+			client.HSet(lang, word, ans)
+			return ans
+		}
+	}
+	e := errors.New("failed to translate in all engines")
+	fmt.Println(e, word)
+	onTranslationError(word, lang, e)
+	return word
+}
+
+func invokeTrans(word, lang, engine string) (string, error) {
 	out := &bytes.Buffer{}
 	combined := &bytes.Buffer{}
 	cmd := exec.Command(config.Command, "-b", ":"+lang, word)
 	cmd.Stdout = io.MultiWriter(out, combined)
 	cmd.Stderr = combined
 	err := cmd.Run()
-	fmt.Println(string(combined.String()))
+	fmt.Println(engine, ":", string(combined.String()))
 	if err != nil {
 		fmt.Println("failed to translate", word, ":", err)
-		onTranslationError(word, lang, errors.Wrapf(err, "API failed"))
-		return word
+		return "", err
 	}
 	ans := strings.ToLower(strings.TrimSpace(string(out.Bytes())))
 	if ans == "" {
-		onTranslationError(word, lang, errors.New("empty reply from API"))
+		return "", errors.New("empty reply from API")
 	}
-	client.HSet(lang, word, ans)
-	return ans
+	return ans, nil
 }
 
 func onTranslationError(originalWord, targetLanguage string, err error) {
@@ -117,6 +140,7 @@ func notificationLoop() {
 	for {
 		select {
 		case msg := <-notifyChannel:
+			fmt.Println(msg)
 			batch = append(batch, msg)
 		case <-ticker.C:
 			if len(batch) == 0 {
@@ -202,4 +226,40 @@ func removeNonPrintableTranslations(client *redis.Client) {
 			notifyChannel <- s
 		}()
 	}
+}
+
+func infoNotification(message string) {
+	go func() { notifyChannel <- fmt.Sprint("[info] ", message) }()
+}
+
+func errorNotification(message string) {
+	go func() { notifyChannel <- fmt.Sprint("[error] ", message) }()
+}
+
+var textOnly = regexp.MustCompile("\\w+")
+
+func getEngines() ([]string, error) {
+	//ssh root@ams.dc.mesh0.com docker exec 73704452b411 trans -S
+	cmd := exec.Command(config.Command, "-S")
+	data, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, err
+	}
+	var engines []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if l := textOnly.FindString(line); l != "" {
+			engines = append(engines, l)
+		}
+	}
+	for i, eng := range engines {
+		if eng != "google" {
+			continue
+		}
+		if i == 0 {
+			break
+		}
+		engines[0], engines[i] = engines[i], engines[0] //move google to first
+		break
+	}
+	return engines, nil
 }
