@@ -7,5 +7,9 @@ services:
   app:
     build: .
     image: app:1.0
+    environment:
+      TG_TOKEN: "TO_REPLACE_TG_TOKEN"
+      TG_TO_REPLACE: "TO_REPLACE_TG_CHAT_ID"
+      NOTIFICATION_INTERVAL: "10s"
     ports:
       - 10101:8888
