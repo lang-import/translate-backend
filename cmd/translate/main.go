@@ -13,6 +13,9 @@ import (
 	"github.com/pkg/errors"
 	"time"
 	"gopkg.in/telegram-bot-api.v4"
+	"unicode"
+	"bytes"
+	"io"
 )
 
 var config struct {
@@ -60,7 +63,7 @@ func main() {
 	notifyChannel = make(chan string)
 	go notificationLoop()
 	go func() { notifyChannel <- "import-lang backend started" }()
-	go removeEmptyTranslations(client)
+	go cleanup(client)
 	panic(router.Run(config.Listen))
 }
 
@@ -74,15 +77,19 @@ func fetch(word, lang string, client *redis.Client) (string) {
 		return cached.Val()
 	}
 	defer fetchLock.Unlock()
+	out := &bytes.Buffer{}
+	combined := &bytes.Buffer{}
 	cmd := exec.Command(config.Command, "-b", ":"+lang, word)
-	res, err := cmd.CombinedOutput()
-	fmt.Println(string(res))
+	cmd.Stdout = io.MultiWriter(out, combined)
+	cmd.Stderr = combined
+	err := cmd.Wait()
+	fmt.Println(string(combined.String()))
 	if err != nil {
 		fmt.Println("failed to translate", word, ":", err)
 		onTranslationError(word, lang, errors.Wrapf(err, "API failed"))
 		return word
 	}
-	ans := strings.ToLower(strings.TrimSpace(string(res)))
+	ans := strings.ToLower(strings.TrimSpace(string(out.Bytes())))
 	if ans == "" {
 		onTranslationError(word, lang, errors.New("empty reply from API"))
 	}
@@ -136,6 +143,11 @@ func notificationLoop() {
 	}
 }
 
+func cleanup(client *redis.Client) {
+	removeEmptyTranslations(client)
+	removeNonPrintableTranslations(client)
+}
+
 func removeEmptyTranslations(client *redis.Client) {
 	removed := 0
 	var stats = make(map[string]int)
@@ -150,7 +162,37 @@ func removeEmptyTranslations(client *redis.Client) {
 		}
 	}
 	if removed > 0 {
-		text := []string{fmt.Sprint("[info] removed ", removed, "trashed (empty) translations")}
+		text := []string{fmt.Sprint("[info] removed ", removed, " trashed (empty) translations")}
+		for lang, count := range stats {
+			text = append(text, fmt.Sprint(lang, ": ", count, " removes"))
+		}
+		go func() {
+			s := strings.Join(text, "\n")
+			fmt.Println(s)
+			notifyChannel <- s
+		}()
+	}
+}
+
+func removeNonPrintableTranslations(client *redis.Client) {
+	removed := 0
+	var stats = make(map[string]int)
+	for _, lang := range client.Keys("*").Val() {
+		fmt.Println("cleaning for", lang)
+		for word, value := range client.HGetAll(lang).Val() {
+			for _, char := range value {
+				if !unicode.IsGraphic(char) {
+					client.HDel(lang, word)
+					removed++
+					stats[lang] = stats[lang] + 1
+					break
+				}
+			}
+
+		}
+	}
+	if removed > 0 {
+		text := []string{fmt.Sprint("[info] removed ", removed, " non-printable translations")}
 		for lang, count := range stats {
 			text = append(text, fmt.Sprint(lang, ": ", count, " removes"))
 		}
