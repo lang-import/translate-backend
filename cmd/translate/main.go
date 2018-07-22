@@ -10,13 +10,21 @@ import (
 	"fmt"
 	"github.com/jessevdk/go-flags"
 	"os"
+	"github.com/pkg/errors"
+	"time"
+	"gopkg.in/telegram-bot-api.v4"
 )
 
 var config struct {
-	Redis   string `long:"redis-url" env:"REDIS_URL" description:"Redis database" default:"redis://redis/1"`
-	Command string `long:"command" env:"COMMAND" description:"Command to run" default:"/usr/bin/trans"`
-	Listen  string `long:"listen" env:"LISTEN" description:"Address to listen" default:":8888"`
+	Redis                string        `long:"redis-url" env:"REDIS_URL" description:"Redis database" default:"redis://redis/1"`
+	Command              string        `long:"command" env:"COMMAND" description:"Command to run" default:"/usr/bin/trans"`
+	Listen               string        `long:"listen" env:"LISTEN" description:"Address to listen" default:":8888"`
+	BotToken             string        `long:"tg-token" env:"TG_TOKEN" description:"Telegram BOT API token for notifications"`
+	BotChatID            int64         `long:"tg-chat-id" env:"TG_CHAT_ID" description:"Telegram chat ID"`
+	ThrottleNotification time.Duration `long:"notification-interval" env:"NOTIFICATION_INTERVAL" description:"Merge notifications to one message during this time" default:"1m"`
 }
+
+var notifyChannel chan string
 
 func main() {
 	_, err := flags.Parse(&config)
@@ -49,12 +57,16 @@ func main() {
 		return
 	})
 
+	notifyChannel = make(chan string)
+	go notificationLoop()
+	go func() { notifyChannel <- "import-lang backend started" }()
+	go removeEmptyTranslations(client)
 	panic(router.Run(config.Listen))
 }
 
 var fetchLock sync.Mutex
 
-func fetch(word, lang string, client *redis.Client) string {
+func fetch(word, lang string, client *redis.Client) (string) {
 	fetchLock.Lock()
 	cached := client.HGet(lang, word)
 	if cached.Err() == nil {
@@ -67,10 +79,85 @@ func fetch(word, lang string, client *redis.Client) string {
 	fmt.Println(string(res))
 	if err != nil {
 		fmt.Println("failed to translate", word, ":", err)
+		onTranslationError(word, lang, errors.Wrapf(err, "API failed"))
 		return word
 	}
 	ans := strings.ToLower(strings.TrimSpace(string(res)))
-
+	if ans == "" {
+		onTranslationError(word, lang, errors.New("empty reply from API"))
+	}
 	client.HSet(lang, word, ans)
 	return ans
+}
+
+func onTranslationError(originalWord, targetLanguage string, err error) {
+	fmt.Println("[error] ", originalWord, "(to", targetLanguage+")", err)
+	notifyChannel <- fmt.Sprint("[error] ", originalWord, " (to ", targetLanguage+") ", err)
+}
+
+func notificationLoop() {
+	var bot *tgbotapi.BotAPI
+	fmt.Println("initializing telegram bot...")
+	if bt, err := tgbotapi.NewBotAPI(config.BotToken); err != nil {
+		fmt.Println("failed initialize telegram notifications:", err)
+	} else {
+		bot = bt
+		fmt.Println("telegram bot initialized")
+	}
+	var batch []string
+	ticker := time.NewTicker(config.ThrottleNotification)
+	defer ticker.Stop()
+	for {
+		select {
+		case msg := <-notifyChannel:
+			batch = append(batch, msg)
+		case <-ticker.C:
+			if len(batch) == 0 {
+				continue
+			}
+			msg := strings.Join(batch, "\n")
+
+			if bot == nil {
+				batch = nil
+				continue // >> /dev/null
+			}
+			fmt.Println("sending notification batch")
+			tmsg := tgbotapi.NewMessage(config.BotChatID, msg)
+			tmsg.DisableWebPagePreview = true
+			_, err := bot.Send(tmsg)
+			if err != nil {
+				fmt.Println("failed send notification over telegram:", err)
+			} else {
+				batch = nil
+				fmt.Println("notification batch sent")
+			}
+
+		}
+	}
+}
+
+func removeEmptyTranslations(client *redis.Client) {
+	removed := 0
+	var stats = make(map[string]int)
+	for _, lang := range client.Keys("*").Val() {
+		fmt.Println("cleaning for", lang)
+		for word, value := range client.HGetAll(lang).Val() {
+			if value == "" {
+				client.HDel(lang, word)
+				removed++
+				stats[lang] = stats[lang] + 1
+			}
+		}
+	}
+	if removed > 0 {
+		text := []string{fmt.Sprint("[info] removed ", removed, "trashed (empty) translations")}
+		for lang, count := range stats {
+			text = append(text, fmt.Sprint(lang, ": ", count, " removes"))
+		}
+		go func() {
+			s := strings.Join(text, "\n")
+			fmt.Println(s)
+			notifyChannel <- s
+		}()
+	}
 }

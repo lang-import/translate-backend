@@ -1,5 +1,5 @@
-FROM golang:1.10-alpine
-RUN apk --no-cache add ca-certificates gawk curl git bash
+FROM golang:1.10-stretch
+RUN apt update && apt install -y gawk curl git
 RUN curl -L -o trans https://git.io/trans && mv trans /usr/bin/ && chmod +x /usr/bin/trans
 WORKDIR /go/src/app
 COPY cmd/. .
