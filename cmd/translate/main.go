@@ -82,7 +82,7 @@ func fetch(word, lang string, client *redis.Client) (string) {
 	cmd := exec.Command(config.Command, "-b", ":"+lang, word)
 	cmd.Stdout = io.MultiWriter(out, combined)
 	cmd.Stderr = combined
-	err := cmd.Wait()
+	err := cmd.Run()
 	fmt.Println(string(combined.String()))
 	if err != nil {
 		fmt.Println("failed to translate", word, ":", err)
