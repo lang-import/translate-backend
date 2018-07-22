@@ -5,7 +5,6 @@ import (
 	"github.com/go-redis/redis"
 	"strings"
 	"net/http"
-	"sync"
 	"os/exec"
 	"fmt"
 	"github.com/jessevdk/go-flags"
@@ -55,7 +54,7 @@ func main() {
 		}
 		cached := client.HGet(lang, word)
 		ans := cached.Val()
-		if cached.Err() == redis.Nil {
+		if cached.Err() != nil {
 			ans = fetch(word, lang, client)
 		}
 		gctx.String(http.StatusOK, ans)
@@ -78,16 +77,7 @@ func main() {
 	panic(router.Run(config.Listen))
 }
 
-var fetchLock sync.Mutex
-
 func fetch(word, lang string, client *redis.Client) (string) {
-	fetchLock.Lock()
-	cached := client.HGet(lang, word)
-	if cached.Err() == nil {
-		fetchLock.Unlock()
-		return cached.Val()
-	}
-	defer fetchLock.Unlock()
 	for _, engine := range engines {
 		ans, err := invokeTrans(word, lang, engine)
 		if err == nil {
