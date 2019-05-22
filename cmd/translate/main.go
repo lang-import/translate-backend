@@ -1,25 +1,25 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis"
-	"strings"
-	"net/http"
-	"os/exec"
-	"fmt"
 	"github.com/jessevdk/go-flags"
-	"os"
 	"github.com/pkg/errors"
-	"time"
 	"gopkg.in/telegram-bot-api.v4"
-	"unicode"
-	"bytes"
 	"io"
+	"net/http"
+	"os"
+	"os/exec"
 	"regexp"
+	"strings"
+	"time"
+	"unicode"
 )
 
 var config struct {
-	Redis                string        `long:"redis-url" env:"REDIS_URL" description:"Redis database" default:"redis://redis/1"`
+	Redis                string        `long:"redis-url" env:"REDIS_URL" description:"Redis database" default:"redis://redis"`
 	Command              string        `long:"command" env:"COMMAND" description:"Command to run" default:"/usr/bin/trans"`
 	Listen               string        `long:"listen" env:"LISTEN" description:"Address to listen" default:":8888"`
 	BotToken             string        `long:"tg-token" env:"TG_TOKEN" description:"Telegram BOT API token for notifications"`
@@ -35,11 +35,10 @@ func main() {
 	if err != nil {
 		os.Exit(1)
 	}
-	clientConfig, err := redis.ParseURL(config.Redis)
-	if err != nil {
-		panic(err)
-	}
-	client := redis.NewClient(clientConfig)
+	first := &redis.Options{Addr: config.Redis, DB: 1}
+	second := &redis.Options{Addr: config.Redis, DB: 2}
+	client := redis.NewClient(first)
+	clientFull := redis.NewClient(second)
 	router := gin.Default()
 	router.GET("/translate/:word/to/:lang", func(gctx *gin.Context) {
 		word := strings.ToLower(strings.TrimSpace(gctx.Param("word")))
@@ -55,7 +54,27 @@ func main() {
 		cached := client.HGet(lang, word)
 		ans := cached.Val()
 		if cached.Err() != nil {
-			ans = fetch(word, lang, client)
+			ans = fetch(word, lang, client, true)
+		}
+		gctx.String(http.StatusOK, ans)
+		return
+	})
+
+	router.GET("/translate_full/:word/to/:lang", func(gctx *gin.Context) {
+		word := strings.ToLower(strings.TrimSpace(gctx.Param("word")))
+		lang := strings.ToLower(strings.TrimSpace(gctx.Param("lang")))
+		if word == "" {
+			gctx.String(http.StatusOK, "")
+			return
+		}
+		if lang == "" {
+			gctx.String(http.StatusOK, "")
+			return
+		}
+		cached := clientFull.HGet(lang, word)
+		ans := cached.Val()
+		if cached.Err() != nil {
+			ans = fetch(word, lang, client, false)
 		}
 		gctx.String(http.StatusOK, ans)
 		return
@@ -77,9 +96,9 @@ func main() {
 	panic(router.Run(config.Listen))
 }
 
-func fetch(word, lang string, client *redis.Client) (string) {
+func fetch(word, lang string, client *redis.Client, isBrief bool) string {
 	for _, engine := range engines {
-		ans, err := invokeTrans(word, lang, engine)
+		ans, err := invokeTrans(word, lang, engine, isBrief)
 		if err == nil {
 			client.HSet(lang, word, ans)
 			return ans
@@ -91,14 +110,37 @@ func fetch(word, lang string, client *redis.Client) (string) {
 	return word
 }
 
-func invokeTrans(word, lang, engine string) (string, error) {
+const (
+	phonetic = "-show-original-phonetics"
+	s_lang   = "-show-languages"
+	s_o_dct  = "-show-original-dictionary"
+	s_promt  = "-show-original"
+	s_alt    = "-show-alternatives"
+	s_dct    = "-show-dictionary"
+	brief    = "-b"
+	n        = "n"
+)
+
+func invokeTrans(word, lang, engine string, isBrief bool) (string, error) {
 	out := &bytes.Buffer{}
 	combined := &bytes.Buffer{}
-	cmd := exec.Command(config.Command, "-e", engine, "-b", ":"+lang, word)
+
+	var cmd *exec.Cmd
+	if isBrief {
+		cmd = exec.Command(config.Command, "-e", engine, brief, ":"+lang, word)
+	} else {
+		cmd = exec.Command(config.Command, "-e", engine, phonetic, n, s_lang, n, s_o_dct, n, s_promt, n, s_alt, n, s_dct, n, ":"+lang, word)
+	}
 	cmd.Stdout = io.MultiWriter(out, combined)
 	cmd.Stderr = combined
 	err := cmd.Run()
-	fmt.Println(engine, ":", string(combined.String()))
+	translateResult := string(out.Bytes())
+	fmt.Println(engine, ":", translateResult)
+
+	//if !isBrief {
+	//TODO　clear translateResult from [1m [22m
+	//}
+
 	if err != nil {
 		fmt.Println("failed to translate", word, ":", err)
 		return "", err
@@ -169,6 +211,7 @@ func removeEmptyTranslations(client *redis.Client) {
 		fmt.Println("cleaning for", lang)
 		for word, value := range client.HGetAll(lang).Val() {
 			if value == "" {
+				go func() { notifyChannel <- fmt.Sprintf("[rm_empty_word] %s | %s |", word, value) }()
 				client.HDel(lang, word)
 				removed++
 				stats[lang] = stats[lang] + 1
@@ -196,6 +239,7 @@ func removeNonPrintableTranslations(client *redis.Client) {
 		for word, value := range client.HGetAll(lang).Val() {
 			for _, char := range value {
 				if !unicode.IsGraphic(char) {
+					go func() { notifyChannel <- fmt.Sprintf("[rm_bad_word] %s | %s |", word, value) }()
 					client.HDel(lang, word)
 					removed++
 					stats[lang] = stats[lang] + 1
@@ -251,5 +295,26 @@ func getEngines() ([]string, error) {
 		engines[0], engines[i] = engines[i], engines[0] //move google to first
 		break
 	}
+
+	engines = removeEng(engines, "aspell")
+
+	go func() { notifyChannel <- fmt.Sprint("[info_engines] ", engines) }()
 	return engines, nil
+}
+
+func removeEng(engines []string, s string) []string {
+	rmIndex := -1
+	for i, eng := range engines {
+		if eng == s {
+			rmIndex = i
+			break
+		}
+	}
+
+	if rmIndex > -1 {
+		engines[rmIndex] = engines[len(engines)-1]
+		engines[len(engines)-1] = ""
+		engines = engines[:len(engines)-1]
+	}
+	return engines
 }
