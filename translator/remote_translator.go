@@ -29,7 +29,7 @@ func (rt *remoteTranslator) Close() error {
 }
 
 func (rt *remoteTranslator) Translate(lang string, word string) (*Translation, error) {
-	targetURL := rt.baseURL + "/translate/" + url.PathEscape(word) + "/to/" + url.PathEscape(word) + "/full"
+	targetURL := rt.baseURL + "/translate/" + url.PathEscape(word) + "/to/" + url.PathEscape(lang) + "/full"
 	rt.logger.Println(lang, "=>", word)
 	res, err := rt.client.Get(targetURL)
 	if err != nil {
