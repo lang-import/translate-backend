@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/jessevdk/go-flags"
-	"github.com/lang-import/translate-backend/translator"
+	"translate-backend/translator"
 	"github.com/reddec/storages/redistorage"
 	"gopkg.in/telegram-bot-api.v4"
 	"net/http"
