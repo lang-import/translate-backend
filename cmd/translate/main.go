@@ -14,6 +14,12 @@ import (
 	"time"
 )
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 var config struct {
 	Remote               []string      `long:"remote" env:"REMOTE" description:"Remote base URLS"`
 	Restrict             []string      `long:"restrict" env:"RESTRICT" description:"Restrict access by IP"`
@@ -32,6 +38,7 @@ func main() {
 	if err != nil {
 		os.Exit(1)
 	}
+	fmt.Printf("%v, commit %v, built at %v", version, commit, date)
 
 	notifyChannel = make(chan string)
 	go notificationLoop()
