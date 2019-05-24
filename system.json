@@ -1,0 +1,15 @@
+{
+  "name": "translate-backend",
+  "services": [
+    {
+      "name": "translator",
+      "exec_start": "./translate-backend",
+      "args": [
+        "--restrict",
+        "78.155.219.118"
+      ],
+      "restart": "always",
+      "restart_sec": 5
+    }
+  ]
+}
