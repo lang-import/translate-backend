@@ -7,6 +7,7 @@ import (
 	"translate-backend/translator"
 	"github.com/reddec/storages/redistorage"
 	"gopkg.in/telegram-bot-api.v4"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -14,6 +15,8 @@ import (
 )
 
 var config struct {
+	Remote               []string      `long:"remote" env:"REMOTE" description:"Remote base URLS"`
+	Restrict             []string      `long:"restrict" env:"RESTRICT" description:"Restrict access by IP"`
 	Redis                string        `long:"redis-url" env:"REDIS_URL" description:"Redis database" default:"redis://localhost"`
 	Command              string        `long:"command" env:"COMMAND" description:"Command to run" default:"/usr/bin/trans"`
 	Listen               string        `long:"listen" env:"LISTEN" description:"Address to listen" default:":8888"`
@@ -38,11 +41,20 @@ func main() {
 }
 
 func run() error {
-	shellTranslator, err := translator.NewShell(config.Command)
+
+	localTranslator, err := translator.NewShell(config.Command)
 	if err != nil {
 		return err
 	}
-	defer shellTranslator.Close()
+	defer localTranslator.Close()
+
+	var backends = []translator.Translator{localTranslator}
+	for _, baseURL := range config.Remote {
+		log.Println("registering remote backend on", baseURL)
+		backends = append(backends, translator.NewRemote(baseURL))
+	}
+
+	pool := translator.NewPool(&translator.Random{}, backends...)
 
 	cache, err := redistorage.New("", config.Redis)
 	if err != nil {
@@ -50,7 +62,7 @@ func run() error {
 	}
 	defer cache.Close()
 
-	cachedTranslator := translator.NewCached(shellTranslator, cache)
+	cachedTranslator := translator.NewCached(pool, cache)
 
 	return setupRoutes(cachedTranslator).Run(config.Listen)
 }
@@ -58,6 +70,18 @@ func run() error {
 func setupRoutes(trans translator.Translator) *gin.Engine {
 	gin.Default()
 	router := gin.Default()
+	if len(config.Restrict) > 0 {
+		router.Use(func(gctx *gin.Context) {
+			cip := gctx.ClientIP()
+			for _, ip := range config.Restrict {
+				if ip == cip {
+					gctx.Next()
+					return
+				}
+			}
+			gctx.AbortWithStatus(http.StatusForbidden)
+		})
+	}
 	router.GET("/translate/:word/to/:lang", func(gctx *gin.Context) {
 		word := strings.ToLower(strings.TrimSpace(gctx.Param("word")))
 		lang := strings.ToLower(strings.TrimSpace(gctx.Param("lang")))
