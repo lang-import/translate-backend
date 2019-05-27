@@ -76,7 +76,9 @@ func (t *shellTranslator) translateWithEngine(engine, lang, word string) (*Trans
 	}
 
 	result := &Translation{
-		Word: lines[0],
+		Original: word,
+		Lang:     lang,
+		Word:     lines[0],
 	}
 
 	for _, line := range lines {

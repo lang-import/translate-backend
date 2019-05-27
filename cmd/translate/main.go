@@ -4,14 +4,15 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/jessevdk/go-flags"
-	"translate-backend/translator"
 	"github.com/reddec/storages/redistorage"
 	"gopkg.in/telegram-bot-api.v4"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
+	"translate-backend/translator"
 )
 
 var (
@@ -130,6 +131,76 @@ func setupRoutes(trans translator.Translator) *gin.Engine {
 			return
 		}
 		gctx.JSON(http.StatusOK, ans)
+		return
+	})
+
+	router.GET("/batch-translate/to/:lang", func(gctx *gin.Context) {
+		lang := strings.ToLower(strings.TrimSpace(gctx.Param("lang")))
+		if lang == "" {
+			gctx.String(http.StatusOK, "")
+			return
+		}
+
+		var words []string
+		if gctx.ContentType() == "application/json" {
+			err := gctx.BindJSON(&words)
+			if err != nil {
+				return
+			}
+		} else {
+			var content string
+			if ct := gctx.Query("words"); len(ct) > 0 {
+				content = ct
+			} else {
+				data, err := gctx.GetRawData()
+				if err != nil {
+					gctx.AbortWithError(http.StatusBadRequest, err)
+					return
+				}
+				content = string(data)
+			}
+			tokens := strings.Split(content, ",")
+			for _, w := range tokens {
+				w = strings.TrimSpace(w)
+				if len(w) > 0 {
+					words = append(words, w)
+				}
+			}
+		}
+
+		if len(words) == 0 {
+			gctx.String(http.StatusOK, "[]")
+			return
+		}
+
+		infoNotification("batch translate to " + lang)
+		var ans = make([]*translator.Translation, len(words))
+		wg := sync.WaitGroup{}
+		for i, word := range words {
+			wg.Add(1)
+			go func(word string, i int) {
+				defer wg.Done()
+				tans, err := trans.Translate(lang, word)
+				if err != nil {
+					errorNotification("translate " + word + " to " + lang + ": " + err.Error())
+					return
+				}
+				ans[i] = tans
+			}(word, i)
+		}
+		wg.Wait()
+
+		var nonEmpty = make([]*translator.Translation, 0, len(ans))
+		for _, a := range ans {
+			if a != nil {
+				nonEmpty = append(nonEmpty, a)
+			}
+		}
+		if len(nonEmpty) == 0 {
+			gctx.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
+		gctx.JSON(http.StatusOK, nonEmpty)
 		return
 	})
 
