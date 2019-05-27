@@ -10,6 +10,8 @@ type Translator interface {
 }
 
 type Translation struct {
-	Word  string `json:"word"`
-	Spell string `json:"spell"`
+	Original string `json:"original"`
+	Lang     string `json:"lang"`
+	Word     string `json:"word"`
+	Spell    string `json:"spell"`
 }
