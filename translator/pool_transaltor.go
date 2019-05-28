@@ -47,7 +47,7 @@ func (p *poolTranslator) Translate(lang string, word string) (*Translation, erro
 	backs := p.strategy.Gen(p.pool)
 	for _, trans := range backs {
 		tr, err := trans.Translate(lang, word)
-		if err == nil {
+		if err == nil && tr.Valid() {
 			return tr, nil
 		}
 	}

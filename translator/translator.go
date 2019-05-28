@@ -15,3 +15,7 @@ type Translation struct {
 	Word     string `json:"word"`
 	Spell    string `json:"spell"`
 }
+
+func (tr *Translation) Valid() bool {
+	return tr.Word != "" && tr.Lang != "" && tr.Original != ""
+}

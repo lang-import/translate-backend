@@ -32,7 +32,7 @@ func (ct *cachedTranslator) Translate(lang string, word string) (*Translation, e
 	if err == nil {
 		var tr *Translation
 		err = json.Unmarshal(value, &tr)
-		if err == nil && tr.Original != "" && tr.Word != "" {
+		if err == nil && tr.Valid() {
 			return tr, nil
 		}
 		// bad cache
