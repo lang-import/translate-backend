@@ -31,7 +31,11 @@ func (ct *cachedTranslator) Translate(lang string, word string) (*Translation, e
 	value, err := ct.cache.Get(key)
 	if err == nil {
 		var tr *Translation
-		return tr, json.Unmarshal(value, &tr)
+		err = json.Unmarshal(value, &tr)
+		if err == nil && tr.Original != "" && tr.Word != "" {
+			return tr, nil
+		}
+		// bad cache
 	}
 	//cache miss or whatever
 	tr, err := ct.wrapped.Translate(lang, word)
